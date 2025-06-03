@@ -67,7 +67,7 @@ try {
 // List of allowed admin emails
 const ALLOWED_ADMIN_EMAILS = [
     'godtim007@gmail.com',
-    'reliancepremiumservices@gmail.com'
+    'reliancepremiumservices@gmail.com',
    'julietfredrick21@gmail.com'
 ];
 
