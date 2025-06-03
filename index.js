@@ -1,4 +1,4 @@
-   const admin = require('firebase-admin');
+const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -68,6 +68,7 @@ try {
 const ALLOWED_ADMIN_EMAILS = [
     'godtim007@gmail.com',
     'reliancepremiumservices@gmail.com'
+   'julietfredrick21@gmail.com'
 ];
 
 // 🔥 IMPROVED: Test Firestore connection with retry
