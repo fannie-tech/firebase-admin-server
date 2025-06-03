@@ -339,3 +339,27 @@ app.listen(PORT, async () => {
         console.log('📝 The notification endpoint may still work for some operations');
     }
 });
+
+
+ app.get('/api/admin-status', authenticateUser, async (req, res) => {
+    try {
+        const uid = req.user.uid;
+        const userDoc = await db.collection('users').doc(uid).get();
+
+        if (!userDoc.exists) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const userData = userDoc.data();
+        const isAdmin = userData.isAdmin === true;
+
+        res.json({
+            uid,
+            email: userData.email || '',
+            isAdmin
+        });
+    } catch (error) {
+        console.error('Error checking admin status:', error);
+        res.status(500).json({ error: 'Server error while checking admin status' });
+    }
+});
