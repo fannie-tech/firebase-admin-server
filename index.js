@@ -1,4 +1,4 @@
- const admin = require('firebase-admin');
+const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -28,7 +28,7 @@ try {
     if (admin.apps.length === 0) {
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount),
-            projectId: serviceAccount.project_id  // Explicitly set project ID
+            projectId: serviceAccount.project_id
         });
         console.log('✅ Firebase Admin initialized successfully');
     }
@@ -55,7 +55,6 @@ const db = admin.firestore();
 
 // 🔥 BETTER: Set Firestore settings
 try {
-    // Set Firestore settings to avoid some authentication issues
     db.settings({
         ignoreUndefinedProperties: true
     });
@@ -70,9 +69,6 @@ const ALLOWED_ADMIN_EMAILS = [
     'reliancepremiumservices@gmail.com',
     'julietfredrick21@gmail.com'
 ];
-
-// 🔥 IMPROVED: Test Firestore connection with retry
- 
 
 // Authentication middleware
 async function authenticateUser(req, res, next) {
@@ -95,10 +91,10 @@ async function authenticateUser(req, res, next) {
 app.post('/api/notify-user-delivery', async (req, res) => {
     console.log('📨 Notification request received');
     console.log('📋 Request body:', JSON.stringify(req.body, null, 2));
-    
+
     try {
         const { userId, status, deliveryData, feedback } = req.body;
-        
+
         if (!userId || !status) {
             console.log('❌ Missing required fields');
             return res.status(400).json({ error: 'Missing userId or status' });
@@ -106,7 +102,6 @@ app.post('/api/notify-user-delivery', async (req, res) => {
 
         console.log(`🔍 Processing notification for user: ${userId}, status: ${status}`);
 
-        // Generate notification content
         let title, body;
 
         switch (status) {
@@ -141,7 +136,6 @@ app.post('/api/notify-user-delivery', async (req, res) => {
 
         console.log('📝 Creating notification documents...');
 
-        // 🔥 Create USER notification (for the user's profile page)
         const userNotificationData = {
             userId: userId,
             title: title,
@@ -160,10 +154,9 @@ app.post('/api/notify-user-delivery', async (req, res) => {
         const userNotificationRef = await db.collection('user_notifications').add(userNotificationData);
         console.log('✅ User notification created with ID:', userNotificationRef.id);
 
-        // 🔥 Create ADMIN notification ONLY for completed deliveries
         let adminNotificationRef = null;
         const shouldNotifyAdmin = ['delivered', 'failed'].includes(status);
-        
+
         if (shouldNotifyAdmin) {
             const adminNotificationData = {
                 type: 'delivery_completed',
@@ -186,56 +179,6 @@ app.post('/api/notify-user-delivery', async (req, res) => {
             console.log('⏭️ Skipping admin notification for status:', status);
         }
 
-        // Try to get user for FCM (optional)
-        try {
-            console.log('👤 Looking up user for FCM...');
-            const userDoc = await db.collection('users').doc(userId).get();
-
-            if (userDoc.exists) {
-                const userData = userDoc.data();
-                console.log('✅ User found:', {
-                    email: userData.email,
-                    hasFCMToken: !!userData.fcmToken
-                });
-
-                // Try FCM if token exists
-                if (userData.fcmToken) {
-                    console.log('📱 Attempting FCM notification...');
-
-                    const message = {
-                        token: userData.fcmToken,
-                        notification: {
-                            title: title,
-                            body: body
-                        },
-                        data: {
-                            type: 'delivery_update',
-                            deliveryId: deliveryData?.id || 'unknown',
-                            status: status
-                        },
-                        webpush: {
-                            headers: {
-                                Urgency: 'high'
-                            },
-                            notification: {
-                                icon: '/assets/img/favicon_io/android-chrome-192x192.png',
-                                badge: '/assets/img/favicon_io/android-chrome-192x192.png',
-                                vibrate: [100, 50, 100],
-                                requireInteraction: true
-                            }
-                        }
-                    };
-
-                    const fcmResponse = await admin.messaging().send(message);
-                    console.log('✅ FCM notification sent:', fcmResponse);
-                }
-            } else {
-                console.log('⚠️ User document not found');
-            }
-        } catch (userError) {
-            console.log('⚠️ User lookup/FCM failed (continuing anyway):', userError.message);
-        }
-
         res.status(200).json({
             success: true,
             message: 'Notification sent successfully',
@@ -245,9 +188,6 @@ app.post('/api/notify-user-delivery', async (req, res) => {
 
     } catch (error) {
         console.error('❌ Notification endpoint error:', error);
-        console.error('Error code:', error.code);
-        console.error('Error stack:', error.stack);
-
         res.status(500).json({
             error: 'Server error: ' + error.message,
             code: error.code || 'UNKNOWN'
@@ -257,7 +197,7 @@ app.post('/api/notify-user-delivery', async (req, res) => {
 
 // Test endpoint
 app.get('/api/test', (req, res) => {
-    res.json({ 
+    res.json({
         message: 'Server is running',
         timestamp: new Date().toISOString(),
         firebase: {
@@ -270,12 +210,11 @@ app.get('/api/test', (req, res) => {
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
     try {
-        // Quick Firestore test
         const testRef = db.collection('_health').doc('check');
         await testRef.set({ timestamp: new Date() });
         await testRef.delete();
-        
-        res.json({ 
+
+        res.json({
             status: 'healthy',
             firestore: 'connected',
             timestamp: new Date().toISOString()
@@ -290,16 +229,12 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
-// Start server
-const PORT = process.env.PORT || 3000;
-
-
- // Update the admin-status endpoint
+// Update the admin-status endpoint
 app.get('/api/admin-status', authenticateUser, async (req, res) => {
     try {
         const uid = req.user.uid;
-        const userEmail = req.user.email; // Get email from the decoded token
-        
+        const userEmail = req.user.email;
+
         const userDoc = await db.collection('users').doc(uid).get();
 
         if (!userDoc.exists) {
@@ -307,13 +242,11 @@ app.get('/api/admin-status', authenticateUser, async (req, res) => {
         }
 
         const userData = userDoc.data();
-        
-        // Check if user is admin either by database flag OR by email list
+
         const isAdminByEmail = ALLOWED_ADMIN_EMAILS.includes(userEmail);
         const isAdminByDatabase = userData.isAdmin === true;
         const isAdmin = isAdminByEmail || isAdminByDatabase;
 
-        // Optionally update the database if user is admin by email but not in database
         if (isAdminByEmail && !isAdminByDatabase) {
             console.log(`🔧 Updating admin status for ${userEmail}`);
             await db.collection('users').doc(uid).update({ isAdmin: true });
@@ -330,4 +263,9 @@ app.get('/api/admin-status', authenticateUser, async (req, res) => {
     }
 });
 
+// Start server
+const PORT = process.env.PORT || 3000;
 
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+});
