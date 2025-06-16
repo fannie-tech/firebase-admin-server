@@ -294,9 +294,12 @@ app.get('/api/health', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 
- app.get('/api/admin-status', authenticateUser, async (req, res) => {
+ // Update the admin-status endpoint
+app.get('/api/admin-status', authenticateUser, async (req, res) => {
     try {
         const uid = req.user.uid;
+        const userEmail = req.user.email; // Get email from the decoded token
+        
         const userDoc = await db.collection('users').doc(uid).get();
 
         if (!userDoc.exists) {
@@ -304,11 +307,21 @@ const PORT = process.env.PORT || 3000;
         }
 
         const userData = userDoc.data();
-        const isAdmin = userData.isAdmin === true;
+        
+        // Check if user is admin either by database flag OR by email list
+        const isAdminByEmail = ALLOWED_ADMIN_EMAILS.includes(userEmail);
+        const isAdminByDatabase = userData.isAdmin === true;
+        const isAdmin = isAdminByEmail || isAdminByDatabase;
+
+        // Optionally update the database if user is admin by email but not in database
+        if (isAdminByEmail && !isAdminByDatabase) {
+            console.log(`🔧 Updating admin status for ${userEmail}`);
+            await db.collection('users').doc(uid).update({ isAdmin: true });
+        }
 
         res.json({
             uid,
-            email: userData.email || '',
+            email: userData.email || userEmail,
             isAdmin
         });
     } catch (error) {
@@ -316,4 +329,5 @@ const PORT = process.env.PORT || 3000;
         res.status(500).json({ error: 'Server error while checking admin status' });
     }
 });
+
 
