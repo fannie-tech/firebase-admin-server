@@ -1,4 +1,4 @@
-const admin = require('firebase-admin');
+ const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -68,42 +68,11 @@ try {
 const ALLOWED_ADMIN_EMAILS = [
     'godtim007@gmail.com',
     'reliancepremiumservices@gmail.com',
-   'julietfredrick21@gmail.com'
+    'julietfredrick21@gmail.com'
 ];
 
 // 🔥 IMPROVED: Test Firestore connection with retry
-async function testFirestore(retries = 3) {
-    for (let i = 0; i < retries; i++) {
-        try {
-            console.log(`🧪 Testing Firestore connection (attempt ${i + 1}/${retries})...`);
-            
-            // Try a simple operation
-            const testRef = db.collection('_connection_test').doc('test');
-            await testRef.set({ 
-                timestamp: admin.firestore.FieldValue.serverTimestamp(),
-                test: true 
-            });
-            
-            console.log('✅ Firestore write test successful');
-            
-            // Clean up test document
-            await testRef.delete();
-            console.log('✅ Firestore connection fully verified');
-            
-            return true;
-        } catch (error) {
-            console.error(`❌ Firestore test attempt ${i + 1} failed:`, error.message);
-            
-            if (i < retries - 1) {
-                console.log('⏳ Retrying in 2 seconds...');
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-        }
-    }
-    
-    console.error('❌ All Firestore connection attempts failed');
-    return false;
-}
+ 
 
 // Authentication middleware
 async function authenticateUser(req, res, next) {
@@ -324,22 +293,6 @@ app.get('/api/health', async (req, res) => {
 // Start server
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, async () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    
-    // Test Firestore connection with retry
-    const firestoreWorking = await testFirestore();
-    
-    if (firestoreWorking) {
-        console.log('🎉 Server ready to handle notifications!');
-        console.log('🔗 Test the server: http://localhost:3000/api/test');
-        console.log('🔗 Health check: http://localhost:3000/api/health');
-    } else {
-        console.log('⚠️ Server started but Firestore connection failed');
-        console.log('📝 The notification endpoint may still work for some operations');
-    }
-});
-
 
  app.get('/api/admin-status', authenticateUser, async (req, res) => {
     try {
@@ -363,3 +316,4 @@ app.listen(PORT, async () => {
         res.status(500).json({ error: 'Server error while checking admin status' });
     }
 });
+
