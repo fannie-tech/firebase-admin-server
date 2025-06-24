@@ -207,6 +207,329 @@ app.get('/api/test', (req, res) => {
     });
 });
 
+
+
+// E-COMMERCE ORDER ENDPOINT
+app.post('/api/ecommerce/create-order', async (req, res) => {
+    console.log(' Simplified e-commerce order received');
+    console.log(' Request body:', JSON.stringify(req.body, null, 2));
+
+    try {
+        const {
+            customerName,
+            phoneNumber,
+            dropOffLocation,
+            productName
+        } = req.body;
+
+        // Validate required fields
+        if (!customerName || !phoneNumber || !dropOffLocation || !productName) {
+            return res.status(400).json({
+                error: 'Missing required fields: customerName, phoneNumber, dropOffLocation, productName'
+            });
+        }
+
+        // Generate unique order ID
+        const orderId = `ECO-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+
+        // Prepare delivery data
+        const deliveryData = {
+            id: orderId,
+            userId: 'ecommerce-system',
+            customerInfo: {
+                name: customerName,
+                phone: phoneNumber
+            },
+            deliveryAddress: {
+                street: dropOffLocation,
+                city: '',
+                state: '',
+                postalCode: '',
+                country: 'Nigeria'
+            },
+            items: [{
+                name: productName,
+                quantity: 1,
+                price: 0,
+                total: 0,
+                description: '',
+                sku: '',
+                category: 'General'
+            }],
+            deliveryType: 'ECOMMERCE',
+            orderType: 'ecommerce_delivery',
+            orderSummary: {
+                subtotal: 0,
+                deliveryFee: 0,
+                tax: 0,
+                discount: 0,
+                total: 0
+            },
+            status: 'pending',
+            priority: 'normal',
+            estimatedDeliveryTime: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours later
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        console.log('📄 Creating simplified delivery request...');
+        const deliveryRef = await db.collection('deliveries').add(deliveryData);
+        console.log('✅ Order created with ID:', deliveryRef.id);
+
+        res.status(200).json({
+            success: true,
+            message: 'Order created successfully',
+            data: {
+                orderId: orderId,
+                deliveryId: deliveryRef.id,
+                status: 'pending',
+                estimatedDelivery: deliveryData.estimatedDeliveryTime
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error creating order:', error);
+        res.status(500).json({
+            error: 'Server error: ' + error.message,
+            code: error.code || 'ORDER_CREATION_ERROR'
+        });
+    }
+});
+
+
+//GET E-COMMERCE ORDER STATUS
+app.get('/api/ecommerce/order-status/:orderId', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        
+        console.log(`🔍 Checking status for order: ${orderId}`);
+
+        // Query deliveries collection for the order
+        const deliveriesQuery = await db.collection('deliveries')
+            .where('id', '==', orderId)
+            .limit(1)
+            .get();
+
+        if (deliveriesQuery.empty) {
+            return res.status(404).json({
+                error: 'Order not found',
+                orderId: orderId
+            });
+        }
+
+        const deliveryDoc = deliveriesQuery.docs[0];
+        const deliveryData = deliveryDoc.data();
+
+        res.status(200).json({
+            success: true,
+            data: {
+                orderId: orderId,
+                status: deliveryData.status,
+                customerInfo: deliveryData.customerInfo,
+                items: deliveryData.items,
+                orderSummary: deliveryData.orderSummary,
+                deliveryAddress: deliveryData.deliveryAddress,
+                createdAt: deliveryData.createdAt,
+                updatedAt: deliveryData.updatedAt,
+                estimatedDeliveryTime: deliveryData.estimatedDeliveryTime,
+                specialInstructions: deliveryData.specialInstructions
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Order status check error:', error);
+        res.status(500).json({
+            error: 'Server error: ' + error.message,
+            code: error.code || 'ORDER_STATUS_ERROR'
+        });
+    }
+});
+
+// UPDATE E-COMMERCE ORDER STATUS (for external systems)
+app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { status, feedback, trackingInfo } = req.body;
+
+        if (!status) {
+            return res.status(400).json({ error: 'Status is required' });
+        }
+
+        console.log(`🔄 Updating order ${orderId} to status: ${status}`);
+
+        // Find the delivery document
+        const deliveriesQuery = await db.collection('deliveries')
+            .where('id', '==', orderId)
+            .limit(1)
+            .get();
+
+        if (deliveriesQuery.empty) {
+            return res.status(404).json({
+                error: 'Order not found',
+                orderId: orderId
+            });
+        }
+
+        const deliveryDoc = deliveriesQuery.docs[0];
+        const updateData = {
+            status: status,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        if (feedback) {
+            updateData.adminFeedback = feedback;
+        }
+
+        if (trackingInfo) {
+            updateData.trackingInfo = trackingInfo;
+        }
+
+        // Update the delivery document
+        await deliveryDoc.ref.update(updateData);
+
+        // Send notification to customer if email exists
+        const deliveryData = deliveryDoc.data();
+        if (deliveryData.customerInfo?.email) {
+            let title, body;
+            
+            switch (status) {
+                case 'confirmed':
+                    title = "✅ Order Confirmed";
+                    body = `Your order #${orderId} has been confirmed and is being prepared.`;
+                    break;
+                case 'in-progress':
+                    title = "🚚 Order In Transit";
+                    body = `Your order #${orderId} is now out for delivery.`;
+                    break;
+                case 'delivered':
+                    title = "📦 Order Delivered";
+                    body = `Your order #${orderId} has been successfully delivered. Thank you!`;
+                    break;
+                case 'failed':
+                    title = "❌ Delivery Failed";
+                    body = `Unfortunately, we couldn't deliver your order #${orderId}. We'll contact you soon.`;
+                    break;
+                default:
+                    title = "📋 Order Update";
+                    body = `Your order #${orderId} status has been updated to: ${status}`;
+            }
+
+            if (feedback) {
+                body += `\n\nNote: ${feedback}`;
+            }
+
+            const customerNotificationData = {
+                userId: 'ecommerce-customer',
+                email: deliveryData.customerInfo.email,
+                title: title,
+                body: body,
+                type: 'order_update',
+                data: {
+                    orderId: orderId,
+                    status: status,
+                    feedback: feedback || null
+                },
+                read: false,
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
+            };
+
+            await db.collection('user_notifications').add(customerNotificationData);
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Order status updated successfully',
+            data: {
+                orderId: orderId,
+                status: status,
+                updatedAt: new Date().toISOString()
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Order update error:', error);
+        res.status(500).json({
+            error: 'Server error: ' + error.message,
+            code: error.code || 'ORDER_UPDATE_ERROR'
+        });
+    }
+});
+
+// GET E-COMMERCE ORDERS SUMMARY (for external dashboards)
+app.get('/api/ecommerce/orders-summary', async (req, res) => {
+    try {
+        const { startDate, endDate, status } = req.query;
+        
+        console.log('📊 Fetching e-commerce orders summary...');
+
+        let query = db.collection('deliveries').where('deliveryType', '==', 'ECOMMERCE');
+
+        // Add date filters if provided
+        if (startDate) {
+            query = query.where('createdAt', '>=', new Date(startDate));
+        }
+        if (endDate) {
+            query = query.where('createdAt', '<=', new Date(endDate));
+        }
+        if (status) {
+            query = query.where('status', '==', status);
+        }
+
+        const ordersSnapshot = await query.get();
+        const orders = [];
+        let totalRevenue = 0;
+
+        ordersSnapshot.forEach(doc => {
+            const orderData = doc.data();
+            orders.push({
+                id: doc.id,
+                orderId: orderData.id,
+                customerName: orderData.customerInfo?.name,
+                status: orderData.status,
+                total: orderData.orderSummary?.total || 0,
+                itemCount: orderData.items?.length || 0,
+                createdAt: orderData.createdAt,
+                source: orderData.source
+            });
+            
+            if (orderData.status === 'delivered') {
+                totalRevenue += orderData.orderSummary?.total || 0;
+            }
+        });
+
+        // Calculate statistics
+        const stats = {
+            totalOrders: orders.length,
+            pendingOrders: orders.filter(o => o.status === 'pending').length,
+            inProgressOrders: orders.filter(o => o.status === 'in-progress').length,
+            deliveredOrders: orders.filter(o => o.status === 'delivered').length,
+            failedOrders: orders.filter(o => o.status === 'failed').length,
+            totalRevenue: totalRevenue,
+            averageOrderValue: orders.length > 0 ? totalRevenue / orders.filter(o => o.status === 'delivered').length : 0
+        };
+
+        res.status(200).json({
+            success: true,
+            data: {
+                orders: orders,
+                statistics: stats,
+                period: {
+                    startDate: startDate || null,
+                    endDate: endDate || null
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Orders summary error:', error);
+        res.status(500).json({
+            error: 'Server error: ' + error.message,
+            code: error.code || 'ORDERS_SUMMARY_ERROR'
+        });
+    }
+});
+
+
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
     try {
