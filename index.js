@@ -4,22 +4,40 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 
-// Load service account
-const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
-
-if (!fs.existsSync(serviceAccountPath)) {
-    console.error('❌ serviceAccountKey.json not found!');
-    process.exit(1);
-}
-
+// WITH THIS NEW CODE:
 let serviceAccount;
 try {
-    serviceAccount = require('./serviceAccountKey.json');
-    console.log('✅ Service account loaded');
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+        // Production: Use environment variable
+        console.log('🔄 Loading service account from environment variable...');
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        console.log('✅ Service account loaded from environment');
+    } else {
+        // Development: Use local file
+        console.log('🔄 Loading service account from local file...');
+        const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
+        
+        if (!fs.existsSync(serviceAccountPath)) {
+            console.error('❌ serviceAccountKey.json not found and no environment variable set!');
+            console.error('💡 Set FIREBASE_SERVICE_ACCOUNT environment variable or add serviceAccountKey.json file');
+            process.exit(1);
+        }
+        
+        serviceAccount = require('./serviceAccountKey.json');
+        console.log('✅ Service account loaded from file');
+    }
+    
     console.log('📋 Project ID:', serviceAccount.project_id);
     console.log('📧 Client Email:', serviceAccount.client_email);
+    
+    // Validate required fields
+    if (!serviceAccount.project_id || !serviceAccount.private_key || !serviceAccount.client_email) {
+        throw new Error('Invalid service account: missing required fields');
+    }
+    
 } catch (error) {
     console.error('❌ Error loading service account:', error);
+    console.error('💡 Make sure your service account JSON is valid');
     process.exit(1);
 }
 
