@@ -227,17 +227,19 @@ app.get('/api/test', (req, res) => {
 
 
 
+
 // E-COMMERCE ORDER ENDPOINT
 app.post('/api/ecommerce/create-order', async (req, res) => {
-    console.log(' Simplified e-commerce order received');
-    console.log(' Request body:', JSON.stringify(req.body, null, 2));
+    console.log('🛒 Simplified e-commerce order received');
+    console.log('📋 Request body:', JSON.stringify(req.body, null, 2));
 
     try {
         const {
             customerName,
             phoneNumber,
             dropOffLocation,
-            productName
+            productName,
+            pickupLocation // NEW: Optional pickup location
         } = req.body;
 
         // Validate required fields
@@ -250,7 +252,7 @@ app.post('/api/ecommerce/create-order', async (req, res) => {
         // Generate unique order ID
         const orderId = `ECO-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
 
-        // Prepare delivery data
+        // Prepare delivery data with optional pickup location
         const deliveryData = {
             id: orderId,
             userId: 'ecommerce-system',
@@ -258,6 +260,15 @@ app.post('/api/ecommerce/create-order', async (req, res) => {
                 name: customerName,
                 phone: phoneNumber
             },
+            // NEW: Add pickup location if provided
+            pickupAddress: pickupLocation ? {
+                street: pickupLocation,
+                city: '',
+                state: '',
+                postalCode: '',
+                country: 'Nigeria',
+                coordinates: null
+            } : null,
             deliveryAddress: {
                 street: dropOffLocation,
                 city: '',
@@ -276,9 +287,12 @@ app.post('/api/ecommerce/create-order', async (req, res) => {
             }],
             deliveryType: 'ECOMMERCE',
             orderType: 'ecommerce_delivery',
+            // NEW: Add service type based on pickup location
+            serviceType: pickupLocation ? 'PICKUP_AND_DELIVERY' : 'DELIVERY_ONLY',
             orderSummary: {
                 subtotal: 0,
                 deliveryFee: 0,
+                pickupFee: pickupLocation ? 0 : null, // NEW: Pickup fee if applicable
                 tax: 0,
                 discount: 0,
                 total: 0
@@ -286,23 +300,41 @@ app.post('/api/ecommerce/create-order', async (req, res) => {
             status: 'pending',
             priority: 'normal',
             estimatedDeliveryTime: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours later
+            // NEW: Add pickup time if pickup location exists
+            estimatedPickupTime: pickupLocation ? new Date(Date.now() + 2 * 60 * 60 * 1000) : null, // 2 hours later
+            specialInstructions: pickupLocation ? `Pickup from: ${pickupLocation}` : null,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
         };
 
-        console.log('📄 Creating simplified delivery request...');
+        console.log('📄 Creating delivery request with pickup info...');
+        console.log(`📍 Pickup Location: ${pickupLocation || 'Not specified'}`);
+        console.log(`📍 Drop-off Location: ${dropOffLocation}`);
+        
         const deliveryRef = await db.collection('deliveries').add(deliveryData);
         console.log('✅ Order created with ID:', deliveryRef.id);
 
+        // Prepare response data
+        const responseData = {
+            orderId: orderId,
+            deliveryId: deliveryRef.id,
+            status: 'pending',
+            serviceType: deliveryData.serviceType,
+            estimatedDelivery: deliveryData.estimatedDeliveryTime
+        };
+
+        // Add pickup info to response if applicable
+        if (pickupLocation) {
+            responseData.pickupLocation = pickupLocation;
+            responseData.estimatedPickup = deliveryData.estimatedPickupTime;
+        }
+
         res.status(200).json({
             success: true,
-            message: 'Order created successfully',
-            data: {
-                orderId: orderId,
-                deliveryId: deliveryRef.id,
-                status: 'pending',
-                estimatedDelivery: deliveryData.estimatedDeliveryTime
-            }
+            message: pickupLocation ? 
+                'Pickup and delivery order created successfully' : 
+                'Delivery order created successfully',
+            data: responseData
         });
 
     } catch (error) {
@@ -314,8 +346,7 @@ app.post('/api/ecommerce/create-order', async (req, res) => {
     }
 });
 
-
-//GET E-COMMERCE ORDER STATUS
+//GET E-COMMERCE ORDER STATUS (Updated to include pickup info)
 app.get('/api/ecommerce/order-status/:orderId', async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -343,14 +374,17 @@ app.get('/api/ecommerce/order-status/:orderId', async (req, res) => {
             data: {
                 orderId: orderId,
                 status: deliveryData.status,
+                serviceType: deliveryData.serviceType || 'DELIVERY_ONLY', // NEW
                 customerInfo: deliveryData.customerInfo,
+                pickupAddress: deliveryData.pickupAddress || null, // NEW
+                deliveryAddress: deliveryData.deliveryAddress,
                 items: deliveryData.items,
                 orderSummary: deliveryData.orderSummary,
-                deliveryAddress: deliveryData.deliveryAddress,
-                createdAt: deliveryData.createdAt,
-                updatedAt: deliveryData.updatedAt,
+                estimatedPickupTime: deliveryData.estimatedPickupTime || null, // NEW
                 estimatedDeliveryTime: deliveryData.estimatedDeliveryTime,
-                specialInstructions: deliveryData.specialInstructions
+                specialInstructions: deliveryData.specialInstructions,
+                createdAt: deliveryData.createdAt,
+                updatedAt: deliveryData.updatedAt
             }
         });
 
@@ -363,11 +397,11 @@ app.get('/api/ecommerce/order-status/:orderId', async (req, res) => {
     }
 });
 
-// UPDATE E-COMMERCE ORDER STATUS (for external systems)
+// UPDATE E-COMMERCE ORDER STATUS (Updated to handle pickup status)
 app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { status, feedback, trackingInfo } = req.body;
+        const { status, feedback, trackingInfo, pickupCompleted } = req.body; // NEW: pickupCompleted
 
         if (!status) {
             return res.status(400).json({ error: 'Status is required' });
@@ -389,6 +423,8 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
         }
 
         const deliveryDoc = deliveriesQuery.docs[0];
+        const deliveryData = deliveryDoc.data();
+        
         const updateData = {
             status: status,
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -402,11 +438,18 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
             updateData.trackingInfo = trackingInfo;
         }
 
+        // NEW: Handle pickup completion
+        if (pickupCompleted !== undefined) {
+            updateData.pickupCompleted = pickupCompleted;
+            if (pickupCompleted) {
+                updateData.pickupCompletedAt = admin.firestore.FieldValue.serverTimestamp();
+            }
+        }
+
         // Update the delivery document
         await deliveryDoc.ref.update(updateData);
 
         // Send notification to customer if email exists
-        const deliveryData = deliveryDoc.data();
         if (deliveryData.customerInfo?.email) {
             let title, body;
             
@@ -414,6 +457,17 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
                 case 'confirmed':
                     title = "✅ Order Confirmed";
                     body = `Your order #${orderId} has been confirmed and is being prepared.`;
+                    if (deliveryData.pickupAddress) {
+                        body += `\n📍 Pickup Location: ${deliveryData.pickupAddress.street}`;
+                    }
+                    break;
+                case 'pickup-ready': // NEW status
+                    title = "📦 Ready for Pickup";
+                    body = `Your order #${orderId} is ready for pickup at ${deliveryData.pickupAddress?.street || 'the specified location'}.`;
+                    break;
+                case 'picked-up': // NEW status
+                    title = "🚚 Item Picked Up";
+                    body = `Your order #${orderId} has been picked up and is now on its way for delivery.`;
                     break;
                 case 'in-progress':
                     title = "🚚 Order In Transit";
@@ -425,7 +479,7 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
                     break;
                 case 'failed':
                     title = "❌ Delivery Failed";
-                    body = `Unfortunately, we couldn't deliver your order #${orderId}. We'll contact you soon.`;
+                    body = `Unfortunately, we couldn't ${deliveryData.pickupAddress ? 'pickup or ' : ''}deliver your order #${orderId}. We'll contact you soon.`;
                     break;
                 default:
                     title = "📋 Order Update";
@@ -445,6 +499,8 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
                 data: {
                     orderId: orderId,
                     status: status,
+                    serviceType: deliveryData.serviceType,
+                    hasPickup: !!deliveryData.pickupAddress,
                     feedback: feedback || null
                 },
                 read: false,
@@ -460,6 +516,9 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
             data: {
                 orderId: orderId,
                 status: status,
+                serviceType: deliveryData.serviceType,
+                hasPickup: !!deliveryData.pickupAddress,
+                pickupCompleted: updateData.pickupCompleted,
                 updatedAt: new Date().toISOString()
             }
         });
@@ -473,10 +532,10 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
     }
 });
 
-// GET E-COMMERCE ORDERS SUMMARY (for external dashboards)
+// GET E-COMMERCE ORDERS SUMMARY (Updated to include pickup info)
 app.get('/api/ecommerce/orders-summary', async (req, res) => {
     try {
-        const { startDate, endDate, status } = req.query;
+        const { startDate, endDate, status, serviceType } = req.query; // NEW: serviceType filter
         
         console.log('📊 Fetching e-commerce orders summary...');
 
@@ -492,6 +551,10 @@ app.get('/api/ecommerce/orders-summary', async (req, res) => {
         if (status) {
             query = query.where('status', '==', status);
         }
+        // NEW: Filter by service type
+        if (serviceType) {
+            query = query.where('serviceType', '==', serviceType);
+        }
 
         const ordersSnapshot = await query.get();
         const orders = [];
@@ -504,6 +567,10 @@ app.get('/api/ecommerce/orders-summary', async (req, res) => {
                 orderId: orderData.id,
                 customerName: orderData.customerInfo?.name,
                 status: orderData.status,
+                serviceType: orderData.serviceType || 'DELIVERY_ONLY', // NEW
+                hasPickup: !!orderData.pickupAddress, // NEW
+                pickupLocation: orderData.pickupAddress?.street || null, // NEW
+                deliveryLocation: orderData.deliveryAddress?.street,
                 total: orderData.orderSummary?.total || 0,
                 itemCount: orderData.items?.length || 0,
                 createdAt: orderData.createdAt,
@@ -515,13 +582,16 @@ app.get('/api/ecommerce/orders-summary', async (req, res) => {
             }
         });
 
-        // Calculate statistics
+        // Calculate statistics (Updated)
         const stats = {
             totalOrders: orders.length,
             pendingOrders: orders.filter(o => o.status === 'pending').length,
             inProgressOrders: orders.filter(o => o.status === 'in-progress').length,
             deliveredOrders: orders.filter(o => o.status === 'delivered').length,
             failedOrders: orders.filter(o => o.status === 'failed').length,
+            // NEW: Pickup-related stats
+            pickupAndDeliveryOrders: orders.filter(o => o.serviceType === 'PICKUP_AND_DELIVERY').length,
+            deliveryOnlyOrders: orders.filter(o => o.serviceType === 'DELIVERY_ONLY').length,
             totalRevenue: totalRevenue,
             averageOrderValue: orders.length > 0 ? totalRevenue / orders.filter(o => o.status === 'delivered').length : 0
         };
@@ -546,6 +616,7 @@ app.get('/api/ecommerce/orders-summary', async (req, res) => {
         });
     }
 });
+
 
 
 // Health check endpoint
