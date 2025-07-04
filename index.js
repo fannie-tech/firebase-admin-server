@@ -411,10 +411,11 @@ app.get('/api/ecommerce/order-status/:orderId', async (req, res) => {
 });
 
 // UPDATE E-COMMERCE ORDER STATUS (Updated to handle pickup status)
+// UPDATE E-COMMERCE ORDER STATUS (Fixed version)
 app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { status, feedback, trackingInfo, pickupCompleted } = req.body; // NEW: pickupCompleted
+        const { status, feedback, trackingInfo, pickupCompleted } = req.body;
 
         if (!status) {
             return res.status(400).json({ error: 'Status is required' });
@@ -422,22 +423,76 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
 
         console.log(`🔄 Updating order ${orderId} to status: ${status}`);
 
-        // Find the delivery document
-        const deliveriesQuery = await db.collection('deliveries')
-            .where('id', '==', orderId)
-            .limit(1)
-            .get();
+        // Try to find the delivery document by Firestore document ID first
+        let deliveryDoc = null;
+        let deliveryData = null;
 
-        if (deliveriesQuery.empty) {
+        try {
+            // First, try to get by document ID
+            const docRef = db.collection('deliveries').doc(orderId);
+            const docSnap = await docRef.get();
+            
+            if (docSnap.exists) {
+                deliveryDoc = docSnap;
+                deliveryData = docSnap.data();
+                console.log('✅ Found order by document ID');
+            }
+        } catch (error) {
+            console.log('Document ID lookup failed, trying field search...');
+        }
+
+        // If not found by document ID, search by the 'id' field
+        if (!deliveryDoc) {
+            const deliveriesQuery = await db.collection('deliveries')
+                .where('id', '==', orderId)
+                .limit(1)
+                .get();
+
+            if (!deliveriesQuery.empty) {
+                deliveryDoc = deliveriesQuery.docs[0];
+                deliveryData = deliveryDoc.data();
+                console.log('✅ Found order by id field');
+            }
+        }
+
+        // If still not found, try searching e-commerce orders specifically
+        if (!deliveryDoc) {
+            const ecommerceQuery = await db.collection('deliveries')
+                .where('deliveryType', '==', 'ECOMMERCE')
+                .where('id', '==', orderId)
+                .limit(1)
+                .get();
+
+            if (!ecommerceQuery.empty) {
+                deliveryDoc = ecommerceQuery.docs[0];
+                deliveryData = deliveryDoc.data();
+                console.log('✅ Found e-commerce order by id field');
+            }
+        }
+
+        if (!deliveryDoc) {
+            console.log(`❌ Order not found: ${orderId}`);
+            
+            // Debug: List some orders to see what's available
+            const debugQuery = await db.collection('deliveries')
+                .where('deliveryType', '==', 'ECOMMERCE')
+                .limit(5)
+                .get();
+            
+            console.log('Available e-commerce orders:');
+            debugQuery.forEach(doc => {
+                const data = doc.data();
+                console.log(`- Doc ID: ${doc.id}, Order ID: ${data.id}, Customer: ${data.customerInfo?.name}`);
+            });
+
             return res.status(404).json({
                 error: 'Order not found',
-                orderId: orderId
+                orderId: orderId,
+                searchedBy: ['document_id', 'id_field', 'ecommerce_type']
             });
         }
 
-        const deliveryDoc = deliveriesQuery.docs[0];
-        const deliveryData = deliveryDoc.data();
-        
+        // Rest of your existing update logic...
         const updateData = {
             status: status,
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -451,7 +506,6 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
             updateData.trackingInfo = trackingInfo;
         }
 
-        // NEW: Handle pickup completion
         if (pickupCompleted !== undefined) {
             updateData.pickupCompleted = pickupCompleted;
             if (pickupCompleted) {
@@ -462,72 +516,14 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
         // Update the delivery document
         await deliveryDoc.ref.update(updateData);
 
-        // Send notification to customer if email exists
-        if (deliveryData.customerInfo?.email) {
-            let title, body;
-            
-            switch (status) {
-                case 'confirmed':
-                    title = "✅ Order Confirmed";
-                    body = `Your order #${orderId} has been confirmed and is being prepared.`;
-                    if (deliveryData.pickupAddress) {
-                        body += `\n📍 Pickup Location: ${deliveryData.pickupAddress.street}`;
-                    }
-                    break;
-                case 'pickup-ready': // NEW status
-                    title = "📦 Ready for Pickup";
-                    body = `Your order #${orderId} is ready for pickup at ${deliveryData.pickupAddress?.street || 'the specified location'}.`;
-                    break;
-                case 'picked-up': // NEW status
-                    title = "🚚 Item Picked Up";
-                    body = `Your order #${orderId} has been picked up and is now on its way for delivery.`;
-                    break;
-                case 'in-progress':
-                    title = "🚚 Order In Transit";
-                    body = `Your order #${orderId} is now out for delivery.`;
-                    break;
-                case 'delivered':
-                    title = "📦 Order Delivered";
-                    body = `Your order #${orderId} has been successfully delivered. Thank you!`;
-                    break;
-                case 'failed':
-                    title = "❌ Delivery Failed";
-                    body = `Unfortunately, we couldn't ${deliveryData.pickupAddress ? 'pickup or ' : ''}deliver your order #${orderId}. We'll contact you soon.`;
-                    break;
-                default:
-                    title = "📋 Order Update";
-                    body = `Your order #${orderId} status has been updated to: ${status}`;
-            }
-
-            if (feedback) {
-                body += `\n\nNote: ${feedback}`;
-            }
-
-            const customerNotificationData = {
-                userId: 'ecommerce-customer',
-                email: deliveryData.customerInfo.email,
-                title: title,
-                body: body,
-                type: 'order_update',
-                data: {
-                    orderId: orderId,
-                    status: status,
-                    serviceType: deliveryData.serviceType,
-                    hasPickup: !!deliveryData.pickupAddress,
-                    feedback: feedback || null
-                },
-                read: false,
-                createdAt: admin.firestore.FieldValue.serverTimestamp()
-            };
-
-            await db.collection('user_notifications').add(customerNotificationData);
-        }
+        console.log(`✅ Order ${orderId} updated successfully`);
 
         res.status(200).json({
             success: true,
             message: 'Order status updated successfully',
             data: {
                 orderId: orderId,
+                documentId: deliveryDoc.id,
                 status: status,
                 serviceType: deliveryData.serviceType,
                 hasPickup: !!deliveryData.pickupAddress,
@@ -544,6 +540,8 @@ app.put('/api/ecommerce/update-order/:orderId', async (req, res) => {
         });
     }
 });
+
+
 
 // GET E-COMMERCE ORDERS SUMMARY (Updated to include pickup info)
 app.get('/api/ecommerce/orders-summary', async (req, res) => {
